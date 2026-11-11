@@ -66,16 +66,6 @@ cd /home/smrc/yejoon/ragflow
   --output-dir tools/healthkr_crawler/output/demo_full
 ```
 
-Useful options:
-
-| Option | Default | Effect |
-| --- | ---: | --- |
-| `--headful` | off | Shows the Chromium search browser. |
-| `--browser-timeout` | 60 seconds | Sets the rendered search-page timeout. |
-| `--request-timeout` | 45 seconds | Sets the detail-page HTTP timeout. |
-| `--request-delay` | 1.5 seconds | Sets the delay between detail requests. The code enforces a 0.5-second floor. |
-| `--allow-count-mismatch` | off | Continues when configured, reported, and discovered counts differ. |
-
 The crawl command opens `records.jsonl` in write mode. A rerun with the same output directory replaces the previous JSONL file.
 
 ## Collection pipeline

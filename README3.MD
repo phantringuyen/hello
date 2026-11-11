@@ -43,7 +43,7 @@ Keep `search_keyword` unique in the configuration. The full crawl joins discover
 
 The loader rejects empty disease names, empty keywords, booleans, negative counts, and non-integer counts.
 
-## Commands
+## Main CLI
 
 ### Discover product URLs
 

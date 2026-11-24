@@ -354,14 +354,14 @@ Both converters read files one line at a time and preserve their source files. A
 
 RAGFlow recognizes a health.kr file when line 1 contains `record_type: "healthkr_records_header"` and schema version `2.0` or `3.0`. The parser skips that header instead of indexing it as content.
 
-For each product, the parser creates one chunk for each top-level medical section under `fields`. Current schema 3.0 records produce these chunks:
+The parser uses two chunking rules:
 
-- `identification_of_drugs`
-- `dosage_instructions`
-- `safety_information`
-- `emergency_information`
+- `identification_of_drugs`, `dosage_instructions`, and `emergency_information` remain one atomic chunk each. The generic JSON splitter cannot cut these sections in half.
+- `safety_information` is a logical parent section. Each non-null safety field, such as `warning`, `interaction`, or `adverse_reactions`, becomes a child chunk. A field above the safe token target is divided into ordered parts at newline, sentence, or list boundaries. Null and empty safety fields do not create useless chunks.
 
-Each chunk repeats these product fields:
+Every chunk repeats the four fields needed to identify and trace the product: `disease`, `search_keyword`, `product_url`, and `crawled_at`.
+
+A safety child has this shape:
 
 ```json
 {
@@ -370,6 +370,10 @@ Each chunk repeats these product fields:
   "product_url": "https://www.health.kr/drug/2016122200009",
   "crawled_at": "2026-11-06T17:45:01+09:00",
   "section": "safety_information",
+  "parent_section_id": "stable SHA-256 value",
+  "field_name": "warning",
+  "part_index": 1,
+  "part_count": 1,
   "fields": {
     "safety_information": {
       "warning": "경고 원문"
@@ -378,11 +382,27 @@ Each chunk repeats these product fields:
 }
 ```
 
-The parser copies only the `missing_fields` paths that belong to the chunk's section. It does not create a separate chunk for `missing_fields`.
+`parent_section_id` is the SHA-256 digest of `<product_url>#safety_information`. All safety children for the same product therefore share one deterministic parent ID. `field_name` identifies the original safety leaf. `part_index` starts at 1, and `part_count` gives the total number of parts for that leaf. Concatenating a leaf's values in `part_index` order reconstructs the source text exactly.
 
-RAGFlow treats each medical section as an atomic parser section. The health.kr path bypasses the generic JSON size splitter, naive chunk merger, overlap, and child-delimiter splitting. `chunk_token_num`, `overlapped_percent`, and `children_delimiter` cannot divide or duplicate a health.kr medical section.
+For the three atomic sections, the parser copies only the `missing_fields` paths belonging to that section. It does not create a separate chunk for `missing_fields`. Missing safety leaves are represented by the absence of a child chunk.
 
-This atomic behavior can create a chunk larger than the configured token target. In the current five-disease schema 3.0 output, the largest serialized `safety_information` object is about 89.8 KB. Check the input limit of the embedding model used by the dataset. A model with a lower limit may truncate or reject that chunk even though RAGFlow keeps the JSON section whole.
+The health.kr path bypasses the generic JSON size splitter, naive chunk merger, overlap, and child-delimiter splitting. `chunk_token_num`, `overlapped_percent`, and `children_delimiter` therefore cannot split an atomic section or divide the parser's safety children again.
+
+#### Token limits and the reason for safety children
+
+RAGFlow counts and truncates embedding input with the `cl100k_base` tokenizer before sending it to the embedding server. The current BGE-M3 TEI service accepts at most 8,192 tokens and also has automatic truncation enabled. Keeping a very large safety object in one chunk would silently lose its tail.
+
+The measured schema 3.0 data contains 14,836 safety objects. Using the embedding model tokenizer, 7,586 of them (51.13%) exceed 8,192 tokens; the largest contains 26,577 tokens. Most of that size comes from individual `adverse_reactions` values, while the other safety leaves normally fit within the limit.
+
+The parser therefore applies these limits with the same `cl100k_base` counter used by RAGFlow's embedding path:
+
+- 6,000 tokens: target maximum for each safety text part. This leaves room for repeated context and JSON keys.
+- 7,500 tokens: warning threshold for the complete serialized chunk.
+- 8,192 tokens: hard limit. Parsing stops with a clear error instead of allowing silent embedding truncation.
+
+Splits have no overlap. The parser first prefers natural boundaries and uses an exact character-boundary fallback only when one uninterrupted unit is itself too large. It verifies that joining all parts reproduces the source text without missing or duplicated characters.
+
+A full validation of the five schema 3.0 disease files processed 14,836 product records into 177,551 chunks. The largest complete serialized chunk was 6,531 `cl100k_base` tokens. Every atomic section matched its source object, and every split safety field reconstructed exactly in part order.
 
 The parser change affects new parsing jobs. RAGFlow does not rewrite chunks that it has indexed. The project Compose file bind-mounts both changed parser files, so the GPU deployment does not need an image rebuild. Recreate the GPU service during an idle period:
 
